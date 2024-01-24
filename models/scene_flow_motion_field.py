@@ -70,7 +70,8 @@ class Model(VideoBaseModel):
         parser.add_argument('--sf_mag_div', type=float, default=100, help='divident for sceneflow network output, making it easier to optimize')
         parser.add_argument('--midas', action='store_true', help='use midas for depth prediction')
         # @XZ: newly-added arguments
-        parser.add_argument('--follow_dynibar', action='store_true', help='use DPT for depth prediction')
+        parser.add_argument('--follow_dynibar', action='store_true', help='use MiDaS and joint depth loss')
+        parser.add_argument('--midas_model_type', type=str, choices=['dpt_beit_large_512', 'midas_v21_384'], default='dpt_beit_large_512', help='specify the model type')
         parser.add_argument('--midas_ckpt_dir', type=str, help='use midas for depth prediction')
         parser.add_argument('--dynibar_depth_mul', type=float, default=10, help='multiplier for flow losses')
         parser.add_argument('--dynibar_depth_no_sm', action='store_true', help='multiplier for flow losses')
@@ -99,15 +100,15 @@ class Model(VideoBaseModel):
         if self.opt.midas:
             if self.opt.follow_dynibar:
                 from third_party.full_midas.midas.model_loader import default_models, load_model
-                midas_model_type = "dpt_beit_large_512"
+                # midas_model_type = "dpt_beit_large_512"
                 midas_square = False
                 midas_height = None
                 midas_optimize = False
-                midas_pretrain_path = str(pathlib.Path(self.opt.midas_ckpt_dir) / f"{midas_model_type}.pt")
+                midas_pretrain_path = str(pathlib.Path(self.opt.midas_ckpt_dir) / f"{self.opt.midas_model_type}.pt")
                 self.net_depth, self.midas_transform, net_w, net_h = load_model(
                     torch.device("cpu"),
                     midas_pretrain_path,
-                    midas_model_type,
+                    self.opt.midas_model_type,
                     midas_optimize,
                     midas_height,
                     midas_square,

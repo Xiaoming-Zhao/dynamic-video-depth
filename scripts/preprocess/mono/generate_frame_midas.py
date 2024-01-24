@@ -99,19 +99,22 @@ if __name__ == "__main__":
     parser.add_argument("--data_root", default=".")
     parser.add_argument("--save_dir", default=".")
     parser.add_argument("--midas_ckpt_dir", type=str)
+    parser.add_argument("--midas_model_type", type=str, choices=['dpt_beit_large_512', 'midas_v21_384'])
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    midas_model_type = "dpt_beit_large_512"
+    print(f'\nuse MiDaS type: {args.midas_model_type}\n')
+
+    # midas_model_type = "dpt_beit_large_512"
     midas_square = False
     midas_height = None
     midas_optimize = False
-    midas_ckpt_path = str(pathlib.Path(args.midas_ckpt_dir) / f"{midas_model_type}.pt")
+    midas_ckpt_path = str(pathlib.Path(args.midas_ckpt_dir) / f"{args.midas_model_type}.pt")
     model, transform, net_w, net_h = load_model(
         device,
         midas_ckpt_path,
-        midas_model_type,
+        args.midas_model_type,
         midas_optimize,
         midas_height,
         midas_square,
@@ -150,14 +153,9 @@ if __name__ == "__main__":
 
     cam_f = data_root / "poses.npy"
 
-    if False:
-        all_c2w, all_hwf = read_poses(
-            cam_f, n_img_fs
-        )  # c2w: [#frame, 4, 4]; hwf: [#frame, 3]
-    else:
-        all_c2w, all_K = read_poses(
-            cam_f, n_img_fs
-        )  # c2w: [#frame, 4, 4]; all_K: [#frame, 3, 3]
+    all_c2w, all_K = read_poses(
+        cam_f, n_img_fs
+    )  # c2w: [#frame, 4, 4]; all_K: [#frame, 3, 3]
 
     print("\nall_c2w: ", all_c2w.shape, all_K.shape, "\n")
 

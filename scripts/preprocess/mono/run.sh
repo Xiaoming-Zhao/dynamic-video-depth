@@ -4,11 +4,13 @@
     DATA_ROOT="$2"
     SAVE_ROOT="$3"
     SCENE_ID="$4"
+    MIDAS_TYPE="$5"
 
     printf '\nREPO_ROOT: %s' ${REPO_ROOT}
     printf '\nDATA_ROOT: %s' ${DATA_ROOT}
     printf '\nSAVE_ROOT: %s' ${SAVE_ROOT}
     printf '\nSCENE_ID: %s' ${SCENE_ID}
+    printf '\nMIDAS_TYPE: %s' ${MIDAS_TYPE}
 
     eval "$(conda shell.bash hook)"
     conda activate pgdvs
@@ -28,21 +30,19 @@
 
     if [ ! -f ${REPO_ROOT}/checkpoints/midas/dpt_beit_large_512.pt ]; then
         wget https://github.com/isl-org/MiDaS/releases/download/v3_1/dpt_beit_large_512.pt -P ${REPO_ROOT}/checkpoints/midas/
-        
-        # aws --endpoint https://blob.mr3.simcloud.apple.com s3 cp s3://generalized_dyn_ibr/MiDaS/ckpts/dpt_beit_large_512.pt ${REPO_ROOT}/checkpoints/midas/
+        wget https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_384.pt -P ${REPO_ROOT}/checkpoints/midas/
     fi
 
     if [ ! -f ${REPO_ROOT}/third_party/RAFT/models/raft-sintel.pth ]; then
         wget https://dl.dropboxusercontent.com/s/4j4z58wuv8o0mfz/models.zip -P ${REPO_ROOT}/third_party/RAFT/
         unzip ${REPO_ROOT}/third_party/RAFT/models.zip -d ${REPO_ROOT}/third_party/RAFT/
-
-        # aws --endpoint https://blob.mr3.simcloud.apple.com s3 cp s3://generalized_dyn_ibr/raft/ckpts/raft-sintel.pth ${REPO_ROOT}/third_party/RAFT/models/
     fi
 
     python ${REPO_ROOT}/scripts/preprocess/mono/generate_frame_midas.py \
         --data_root ${DATA_ROOT} \
         --save_dir ${SAVE_ROOT} \
-        --midas_ckpt_dir ${REPO_ROOT}/checkpoints/midas
+        --midas_ckpt_dir ${REPO_ROOT}/checkpoints/midas \
+        --midas_model_type ${MIDAS_TYPE}
     
     python ${REPO_ROOT}/scripts/preprocess/mono/generate_flows.py \
         --data_root ${SAVE_ROOT} \
