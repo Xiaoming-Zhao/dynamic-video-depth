@@ -1,8 +1,8 @@
 This repo is modified to tailor to the need of the work [PGDVS, ICLR 2024](https://arxiv.org/abs/2310.08587). We mainly modify the following:
 
-1. We support ViT-based MiDaS;
-2. Instead of modifiying camera extrinsic's translations as used in Sec. 3.2 of [the orignal paper](https://arxiv.org/abs/2108.01166), we modify the scale of the predicted depth to align with the given camera poses;
-3. We follow [DynIBaR](https://arxiv.org/abs/2211.11082) to add a regularization loss during the optimization (see Sec. 3 of the [DynIBaR's supp](https://dynibar.github.io/static/pdfs/supp.pdf)).
+1. We support ViT-based MiDaS (see [here](https://github.com/Xiaoming-Zhao/dynamic-video-depth/blob/fe5ba2c2aaa66d9948c9e3783eac900809b8532a/models/scene_flow_motion_field.py#L100-L114));
+2. Instead of modifiying camera extrinsic's translations as used in Sec. 3.2 of [the orignal paper](https://arxiv.org/abs/2108.01166) (see [this line](https://github.com/Xiaoming-Zhao/dynamic-video-depth/blob/fe5ba2c2aaa66d9948c9e3783eac900809b8532a/scripts/preprocess/davis/generate_frame_midas.py#L135)), we modify the scale of the predicted depth to align with the given camera poses (see [this line](https://github.com/Xiaoming-Zhao/dynamic-video-depth/blob/fe5ba2c2aaa66d9948c9e3783eac900809b8532a/datasets/mono_sequence.py#L162));
+3. We follow [DynIBaR](https://arxiv.org/abs/2211.11082) to add a regularization loss during the optimization (see Sec. 3 of the [DynIBaR's supp](https://dynibar.github.io/static/pdfs/supp.pdf) and [this line](https://github.com/Xiaoming-Zhao/dynamic-video-depth/blob/fe5ba2c2aaa66d9948c9e3783eac900809b8532a/models/scene_flow_motion_field.py#L416-L417)).
 
 # Consistent Depth of Moving Objects in Video
 
