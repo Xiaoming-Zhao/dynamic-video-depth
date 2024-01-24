@@ -27,6 +27,9 @@ sys.path.insert(0, '')
 from configs import midas_pretrain_path
 from third_party.MiDaS import MidasNet
 
+# Looks like this is "midas_v21_384":
+# https://github.com/isl-org/MiDaS/blob/1645b7e1675301fdfac03640738fe5a6531e17d6/midas/model_loader.py#L171C21-L171C21
+# But not sure why the size is [256, 512]
 model = MidasNet(midas_pretrain_path, non_negative=True, resize=[256, 512], normalize_input=True)
 
 model = model.eval().cuda()
@@ -83,6 +86,7 @@ for track_id in track_ids:
         depth = im_pt[2, :].copy()
         im_pt = im_pt / im_pt[2:, :]
 
+        # True value measn dynamic
         mask = np.asarray(Image.open(mask_paths[x]).convert('RGB')).astype(np.float32)[:, :, 0] / 255
         masks.append(mask)
         H, W, _ = img.shape
@@ -113,7 +117,7 @@ for track_id in track_ids:
 
     print('saving per frame output')
 
-    for idf, frame_path in tqdm(enumerate(frames)):
+    for idf, frame_path in enumerate(tqdm(frames)):
         img_orig = np.asarray(Image.open(frames[idf])).astype(np.float32) / 255
         max_W = 384
         multiple = 64
@@ -131,7 +135,10 @@ for track_id in track_ids:
         T_G_1[:3, 3] *= s
         T_G_1 = np.linalg.inv(T_G_1)  # cam2world
         T_G_1 = T_G_1.astype(np.float32)
+
+        # Not a bug. See https://github.com/google/dynamic-video-depth/issues/6
         depth_mvs = imresize(full_pred_depths[idf].astype(np.float32), ([target_H, target_W]), preserve_range=True).astype(np.float32)
+        
         in_1 = intrinsics.copy()
         in_1[0, 0] /= W / target_W
         in_1[1, 1] /= H / target_H

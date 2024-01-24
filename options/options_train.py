@@ -144,6 +144,10 @@ def add_general_arguments(parser):
     parser.add_argument('--vis_at_start', action='store_true', help='visualize the first batches in an epoch instead of the last ones.')
     parser.add_argument('--test_template', type=str, default=None, help='test command template path')
 
+    # @XZ
+    parser.add_argument('--pure_test', action='store_true', help='test command template path')
+    parser.add_argument('--test_output_dir', type=str, help='path to save test results')
+
     return parser, unique_params
 
 

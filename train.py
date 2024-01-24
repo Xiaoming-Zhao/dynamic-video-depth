@@ -51,31 +51,32 @@ def main():
 
     if opt.resume == 0:
         if os.path.isdir(logdir):
-            if opt.force_overwrite:
-                print(
-                    str_warning, (
-                        "removing Experiment %d at\n\t%s\n"
-                    ) % (opt.expr_id, logdir)
-                )
-                os.system('rm -rf ' + logdir)
-            elif opt.expr_id <= 0:
-                print(
-                    str_warning, (
-                        "Will remove Experiment %d at\n\t%s\n"
-                        "Do you want to continue? (y/n)"
-                    ) % (opt.expr_id, logdir)
-                )
-                need_input = True
-                while need_input:
-                    response = input().lower()
-                    if response in ('y', 'n'):
-                        need_input = False
-                if response == 'n':
-                    print(str_stage, "User decides to quit")
-                    sys.exit()
-                os.system('rm -rf ' + logdir)
-            else:
-                raise ValueError(str_error + " Refuse to remove positive expr_id")
+            if not opt.pure_test:
+                if opt.force_overwrite:
+                    print(
+                        str_warning, (
+                            "removing Experiment %d at\n\t%s\n"
+                        ) % (opt.expr_id, logdir)
+                    )
+                    os.system('rm -rf ' + logdir)
+                elif opt.expr_id <= 0:
+                    print(
+                        str_warning, (
+                            "Will remove Experiment %d at\n\t%s\n"
+                            "Do you want to continue? (y/n)"
+                        ) % (opt.expr_id, logdir)
+                    )
+                    need_input = True
+                    while need_input:
+                        response = input().lower()
+                        if response in ('y', 'n'):
+                            need_input = False
+                    if response == 'n':
+                        print(str_stage, "User decides to quit")
+                        sys.exit()
+                    os.system('rm -rf ' + logdir)
+                else:
+                    raise ValueError(str_error + " Refuse to remove positive expr_id")
         os.system('mkdir -p ' + logdir)
     else:
         if not os.path.isdir(logdir):
@@ -157,13 +158,13 @@ def main_worker(local_rank, ngpus, opt):
     else:
         prev_best = None
     if global_rank == 0:
-        best_model_logger = loggers.ModelSaveLogger(
-            os.path.join(logdir, 'best.pt'),
-            period=1,
-            save_optimizer=True,
-            save_best=True,
-            prev_best=prev_best
-        )
+        # best_model_logger = loggers.ModelSaveLogger(
+        #     os.path.join(logdir, 'best.pt'),
+        #     period=1,
+        #     save_optimizer=True,
+        #     save_best=True,
+        #     prev_best=prev_best
+        # )
         logger_list = [
             loggers.TerminateOnNaN(),
             loggers.ProgbarLogger(allow_unused_fields='all',
@@ -182,7 +183,7 @@ def main_worker(local_rank, ngpus, opt):
                 period=1,
                 save_optimizer=True
             ),
-            best_model_logger,
+            # best_model_logger,
         ]
         if opt.log_batch:
             logger_list.append(
@@ -199,7 +200,7 @@ def main_worker(local_rank, ngpus, opt):
                     parent_dir, opt.tensorboard_keyword, 'tensorboard', sub_dir)
             else:
                 tf_logdir = os.path.join(
-                    opt.logdir, 'tensorboard', exprdir, str(opt.expr_id))
+                    opt.logdir, exprdir, 'tensorboard', str(opt.expr_id))
             if os.path.exists(tf_logdir) and opt.resume == 0:
                 os.system('rm -r ' + tf_logdir)
 
@@ -290,68 +291,74 @@ def main_worker(local_rank, ngpus, opt):
         for net in model._nets:
             for p in net.parameters():
                 dist.broadcast(p, 0, async_op=False)
+    
+    if not opt.pure_test:
 
-    # Setting up data loaders
-    # Get custom collate function to deal with variable size inputs.
-    if hasattr(Model, 'collate_fn'):
-        collate_fn = Model.collate_fn
-    else:
-        # use default collate function instead.
-        collate_fn = torch.utils.data._utils.collate.default_collate
-    if opt.multiprocess_distributed:
-        training_sampler = torch.utils.data.distributed.DistributedSampler(
-            dataset_train)
-        call_back = training_sampler.set_epoch
-        training_sampler.set_epoch(opt.epoch)
-    else:
-        training_sampler = None
-        call_back = None
-    dataloader_train = torch.utils.data.DataLoader(
-        dataset_train,
-        batch_size=opt.batch_size,
-        shuffle=(training_sampler is None),
-        sampler=training_sampler,
-        num_workers=opt.workers,
-        pin_memory=True,
-        drop_last=True,
-        collate_fn=collate_fn
-    )
-    dataloader_vali = torch.utils.data.DataLoader(
-        dataset_vali,
-        batch_size=opt.batch_size,
-        num_workers=opt.workers,
-        pin_memory=True,
-        drop_last=True,
-        shuffle=False,
-        collate_fn=collate_fn
-    )
-    if global_rank == 0:
-        _safe_print(str_verbose, "Time spent in data IO initialization: %.2fs" %
-                    (time.time() - start_time))
-        _safe_print(str_verbose, "# training points: " + str(len(dataset_train)))
-        _safe_print(str_verbose, "# training batches per epoch: " + str(len(dataloader_train)))
-        _safe_print(str_verbose, "# test batches: " + str(len(dataloader_vali)))
-
-    # Training
-
-    if opt.epoch > 0:
-        _safe_print(str_stage, "Training")
-        model.train_epoch(
-            dataloader_train,
-            dataloader_vali=dataloader_vali,
-            max_batches_per_train=opt.epoch_batches,
-            epochs=opt.epoch,
-            initial_epoch=initial_epoch,
-            max_batches_per_vali=opt.vali_batches,
-            vali_at_start=opt.vali_at_start,
-            train_epoch_callback=call_back
+        # Setting up data loaders
+        # Get custom collate function to deal with variable size inputs.
+        if hasattr(Model, 'collate_fn'):
+            collate_fn = Model.collate_fn
+        else:
+            # use default collate function instead.
+            collate_fn = torch.utils.data._utils.collate.default_collate
+        if opt.multiprocess_distributed:
+            training_sampler = torch.utils.data.distributed.DistributedSampler(
+                dataset_train)
+            call_back = training_sampler.set_epoch
+            training_sampler.set_epoch(opt.epoch)
+        else:
+            training_sampler = None
+            call_back = None
+        dataloader_train = torch.utils.data.DataLoader(
+            dataset_train,
+            batch_size=opt.batch_size,
+            shuffle=(training_sampler is None),
+            sampler=training_sampler,
+            num_workers=opt.workers,
+            pin_memory=True,
+            drop_last=True,
+            collate_fn=collate_fn
         )
+        dataloader_vali = torch.utils.data.DataLoader(
+            dataset_vali,
+            batch_size=opt.batch_size,
+            num_workers=opt.workers,
+            pin_memory=True,
+            drop_last=True,
+            shuffle=False,
+            collate_fn=collate_fn
+        )
+        if global_rank == 0:
+            _safe_print(str_verbose, "Time spent in data IO initialization: %.2fs" %
+                        (time.time() - start_time))
+            _safe_print(str_verbose, "# training points: " + str(len(dataset_train)))
+            _safe_print(str_verbose, "# training batches per epoch: " + str(len(dataloader_train)))
+            _safe_print(str_verbose, "# test batches: " + str(len(dataloader_vali)))
+
+        # Training
+
+        if opt.epoch > 0:
+            _safe_print(str_stage, "Training")
+            model.train_epoch(
+                dataloader_train,
+                dataloader_vali=dataloader_vali,
+                max_batches_per_train=opt.epoch_batches,
+                epochs=opt.epoch,
+                initial_epoch=initial_epoch,
+                max_batches_per_vali=opt.vali_batches,
+                vali_at_start=opt.vali_at_start,
+                train_epoch_callback=call_back
+            )
 
     if opt.test_template is not None:
         del model
         torch.cuda.empty_cache()
         with open(opt.test_template) as f:
             cmd = f.readlines()[0]
+        
+        print("\nopt.suffix: ", opt.suffix, "\n")
+        print("\nvars(opt): ", vars(opt), "\n")
+
         cmd = cmd.format(suffix_expand=opt.suffix.format(**vars(opt)), **vars(opt))
         from subprocess import call
         with open(os.path.join(opt.full_logdir, 'test_cmd.sh'), 'w') as f:

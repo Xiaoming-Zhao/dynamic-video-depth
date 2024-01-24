@@ -116,7 +116,6 @@ class VideoBaseModel(NetInterface):
             output['flow_1_2'] = self._input.flow_1_2.cpu().numpy()
             output['flow_2_1'] = self._input.flow_2_1.cpu().numpy()
             output['depth_nn_1'] = batch['depth_pred_1'].cpu().numpy()
-
         else:
             output['depth_nn'] = batch['depth_pred'].cpu().numpy()
             output['depth_gt'] = batch['depth_mvs'].cpu().numpy()
@@ -145,9 +144,14 @@ class VideoBaseModel(NetInterface):
             self.outdir = outdir
         makedirs(outdir, exist_ok=True)
         output = self.pack_output(pred, batch)
+
         if batch_idx == 223:
-            output['depth'][0, 0, 0, :] = output['depth'][0, 0, 2, :]
-            output['depth'][0, 0, 1, :] = output['depth'][0, 0, 2, :]
+            # (XZ): not sure why we need the following hack?
+            # output['depth'][0, 0, 0, :] = output['depth'][0, 0, 2, :]
+            # output['depth'][0, 0, 1, :] = output['depth'][0, 0, 2, :]
+
+            print("\n\nHere batch idx 223\n\n")
+
         self.test_cache.append(output.copy())
         if self.global_rank == 0:
             if self.visualizer is not None:

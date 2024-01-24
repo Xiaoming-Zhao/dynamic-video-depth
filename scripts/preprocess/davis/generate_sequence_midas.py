@@ -172,7 +172,7 @@ def datadict_from_pair(key, pair):
 
 if __name__ == '__main__':
     track_names = sorted(glob(join(data_list_root, '*')))
-    track_names = ['train', 'dog']
+    track_names = ['train']  # ['train', 'dog']
     for key in track_names:
         all_frames = sorted(glob(join(data_list_root, key, '*.npz')))
         gaps = [1, 2, 3, 4, 5, 6, 7, 8]
@@ -186,7 +186,7 @@ if __name__ == '__main__':
         for gap in tqdm(gaps):
             fids = np.arange(len(all_frames) - bs - gap)
             cnt = 0
-            for f in fids:
+            for f in tqdm(fids):
                 seq_list_forward = np.arange(f, f + bs)
                 sequence = collate_sequence_fix_gap(key, seq_list_forward, gap=gap,)
                 torch.save(sequence, join(save_path, f'shuffle_False_gap_{gap:02d}_sequence_{cnt:05d}.pt'))

@@ -46,7 +46,12 @@ def _make_resnet_backbone(resnet):
 
 
 def _make_pretrained_resnext101_wsl(use_pretrained):
-    resnet = torch.hub.load("facebookresearch/WSL-Images", "resnext101_32x8d_wsl")
+    # resnet = torch.hub.load("facebookresearch/WSL-Images", "resnext101_32x8d_wsl")
+
+    # Ref:
+    # - https://github.com/isl-org/MiDaS/issues/140#issuecomment-965399676
+    # - https://github.com/pytorch/vision/issues/4156#issuecomment-939680999
+    resnet = torch.hub.load("facebookresearch/WSL-Images:main", "resnext101_32x8d_wsl", skip_validation=True)
     return _make_resnet_backbone(resnet)
 
 

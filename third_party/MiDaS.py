@@ -163,6 +163,9 @@ class MidasNet_mod(BaseModel):
 
 class MidasNet(BaseModel):
     """Network for monocular depth estimation.
+
+    Looks like this is "midas_v21_384":
+    https://github.com/isl-org/MiDaS/blob/1645b7e1675301fdfac03640738fe5a6531e17d6/midas/model_loader.py#L171C21-L171C21
     """
 
     def __init__(self, path=None, features=256, non_negative=True, normalize_input=False, resize=None):

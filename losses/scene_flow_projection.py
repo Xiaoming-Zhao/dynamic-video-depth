@@ -238,7 +238,7 @@ class scene_flow_projection_slack(nn.Module):
         global_p2 = torch.matmul(p2_camera_2, R_2) + t_2
 
         p2_camera_2_w = p2_camera_2.squeeze(3).permute([0, 3, 1, 2])  # B3HW
-        warped_p2_camera_2 = self.backward_warp(p2_camera_2_w, flow_1_2)
+        warped_p2_camera_2 = self.backward_warp(p2_camera_2_w, flow_1_2)  # B3HW
         warped_p2_camera_2 = warped_p2_camera_2.permute([0, 2, 3, 1])[..., None, :]  # BHW13
 
         p1_camera_2 = torch.matmul(global_p1 + sflow_1_2 - t_2, R_2_T)
@@ -262,10 +262,10 @@ class scene_flow_projection_slack(nn.Module):
         coord_image_2_static[idB, idH, idW, idC, idF] = tr_coord[idB, idH, idW, idC, idF]
         coord_image_2_static[idB, idH, idW, idC, idF + 1] = tr_coord[idB, idH, idW, idC, idF + 1]
 
-        depth_flow_1_2 = (coord_image_2 - coord[..., :-1])[..., 0, :]  # p_{1 -> 2}
+        depth_flow_1_2 = (coord_image_2 - coord[..., :-1])[..., 0, :]  # p_{1 -> 2}, BHW2
 
-        depth_flow_1_2_static = (coord_image_2_static - coord[..., :-1])[..., 0, :]
-        depth_image_1_2 = p1_image_2[..., -1].permute(0, 3, 1, 2)  # z_{1 -> 2}
+        depth_flow_1_2_static = (coord_image_2_static - coord[..., :-1])[..., 0, :]  # BHW2
+        depth_image_1_2 = p1_image_2[..., -1].permute(0, 3, 1, 2)  # z_{1 -> 2}, B1HW
 
         # forward warping depth
         depth_1 = depth_1.view(B, 1, H, W)

@@ -20,13 +20,19 @@ from visualize.html_visualizer import HTMLVisualizer as Visualizer
 import torch.nn.functional as F
 import inspect
 from functools import partial
-from configs import depth_pretrain_path, midas_pretrain_path
+# from configs import depth_pretrain_path, midas_pretrain_path
 from losses.scene_flow_projection import scene_flow_projection_slack, flow_by_depth, BackwardWarp, unproject_ptcld
 from networks.FCNUnet import FCNUnet
 from networks.sceneflow_field import SceneFlowFieldNet
 import numpy as np
 from os.path import join
 from os import makedirs
+import pathlib
+
+
+TINY_VAL = 1e-8
+
+# FLAG_MOTION_SEG_FOR_STATIC = False
 
 
 class Model(VideoBaseModel):
@@ -63,6 +69,12 @@ class Model(VideoBaseModel):
         parser.add_argument('--n_freq_t', type=int, default=16, help='time embeddings')
         parser.add_argument('--sf_mag_div', type=float, default=100, help='divident for sceneflow network output, making it easier to optimize')
         parser.add_argument('--midas', action='store_true', help='use midas for depth prediction')
+        # @XZ: newly-added arguments
+        parser.add_argument('--follow_dynibar', action='store_true', help='use DPT for depth prediction')
+        parser.add_argument('--midas_ckpt_dir', type=str, help='use midas for depth prediction')
+        parser.add_argument('--dynibar_depth_mul', type=float, default=10, help='multiplier for flow losses')
+        parser.add_argument('--dynibar_depth_no_sm', action='store_true', help='multiplier for flow losses')
+        parser.add_argument('--motion_seg_for_static', action='store_true', help='multiplier for flow losses')
 
         return parser, set()
 
@@ -78,20 +90,43 @@ class Model(VideoBaseModel):
     def __init__(self, opt, loggers):
         super().__init__(opt, loggers)
         self.input_names = ['img', 'img_1', 'img_2', 'pose', 'intrinsic', 'mask_1', 'mask_2', 'R_1', 'R_1_T',
-                            'R_2', 'R_2_T', 't_1', 't_2', 'flow_1_2', 'flow_2_1', 'K', 'K_inv', 'motion_seg_1', 'time_stamp_1', 'time_stamp_2', 'frame_id_1', 'frame_id_2', 'time_step']
+                            'R_2', 'R_2_T', 't_1', 't_2', 'flow_1_2', 'flow_2_1', 'K', 'K_inv', 'motion_seg_1', 'time_stamp_1', 'time_stamp_2', 'frame_id_1', 'frame_id_2', 'time_step',
+                            # @(XZ): for rescale depth prediction
+                            'depth_pred_1', 'disp_scale', 'disp_shift']
         self.gt_names = []
         self.requires = list(set().union(self.input_names, self.gt_names))
+        
         if self.opt.midas:
-            resize = None
-            if 'real_video' in self.opt.dataset:
-                resize = [224, 384]
-            if 'korean' in self.opt.dataset:
-                resize = [224, 384]
-            if 'mctest' in self.opt.dataset:
-                resize = [224, 384]
-            if 'cube' in self.opt.dataset:
-                resize = [224, 384]
-            self.net_depth = MidasNet(path=midas_pretrain_path, non_negative=True, normalize_input=True, resize=resize)
+            if self.opt.follow_dynibar:
+                from third_party.full_midas.midas.model_loader import default_models, load_model
+                midas_model_type = "dpt_beit_large_512"
+                midas_square = False
+                midas_height = None
+                midas_optimize = False
+                midas_pretrain_path = str(pathlib.Path(self.opt.midas_ckpt_dir) / f"{midas_model_type}.pt")
+                self.net_depth, self.midas_transform, net_w, net_h = load_model(
+                    torch.device("cpu"),
+                    midas_pretrain_path,
+                    midas_model_type,
+                    midas_optimize,
+                    midas_height,
+                    midas_square,
+                )
+
+                print(f"\nUse MiDaS DPT: {midas_pretrain_path}\n")
+            else:
+                from configs import midas_pretrain_path
+                self.midas_transform = None
+                resize = None
+                if 'real_video' in self.opt.dataset:
+                    resize = [224, 384]
+                if 'korean' in self.opt.dataset:
+                    resize = [224, 384]
+                if 'mctest' in self.opt.dataset:
+                    resize = [224, 384]
+                if 'cube' in self.opt.dataset:
+                    resize = [224, 384]
+                self.net_depth = MidasNet(path=midas_pretrain_path, non_negative=True, normalize_input=True, resize=resize)
 
         else:
             self.net_depth = HourglassModel_Embed(noexp=False, use_embedding=opt.use_embedding)
@@ -118,6 +153,7 @@ class Model(VideoBaseModel):
         if opt.midas:
             pass
         else:
+            from configs import depth_pretrain_path
             self.net_depth.net_depth.load_state_dict(torch.load(depth_pretrain_path))
 
         self.init_weight(self.net_sceneflow, 'kaiming', 0.01, a=0.2)
@@ -136,6 +172,44 @@ class Model(VideoBaseModel):
         for x in flow_arg_list:
             if hasattr(self._input, x):
                 self.flow_args.append(x)
+        
+        if self.opt.follow_dynibar:
+            from models.depth_loss import JointLoss
+            self.depth_joint_loss = JointLoss()
+            self._metrics.append("depth_joint_loss")
+        
+        if self.opt.motion_seg_for_static:
+            self._metrics.append("static_loss_1_2")
+    
+    def _run_midas_dpt(self, original_image_rgb):
+
+        n_b, _, h, w = original_image_rgb.shape  # B3HW
+
+        all_images = []
+        for i_b in range(n_b):
+            tmp_img = original_image_rgb[i_b, ...].permute(1, 2, 0).cpu().numpy()
+            tmp_img = self.midas_transform({"image": tmp_img})["image"]
+            tmp_img = torch.from_numpy(tmp_img).to(original_image_rgb.device).unsqueeze(0)
+            all_images.append(tmp_img)
+        
+        all_images = torch.cat(all_images, dim=0).to(original_image_rgb.device)
+
+        pred_disp = self.net_depth.forward(all_images)
+        pred_disp = torch.nn.functional.interpolate(
+            pred_disp.unsqueeze(1),
+            size=(h, w),
+            mode="bicubic",
+            align_corners=False,
+        )  # inverse depth
+
+        # rescale
+        pred_disp_rescale = self._input.disp_scale * pred_disp + self._input.disp_shift
+
+        pred_disp_rescale = torch.clamp(pred_disp_rescale, min=1e-8)
+
+        pred_depth = 1 / (pred_disp_rescale + TINY_VAL)  # B1HW
+
+        return pred_depth
 
     def disp_loss(self, d1, d2):
         if self.opt.use_disp:
@@ -158,7 +232,6 @@ class Model(VideoBaseModel):
                 for param in self.net_depth.parameters():
                     param.requires_grad = False
             else:
-
                 self.net_depth.freeze()    # freeze bn
 
             self.warm = True
@@ -176,7 +249,7 @@ class Model(VideoBaseModel):
 
         for k, v in batch.items():
             if type(v) != list:
-                batch[k] = v.squeeze(0)
+                batch[k] = v.squeeze(0)  # due to batch size = 1?
 
         self.load_batch(batch)
 
@@ -230,9 +303,12 @@ class Model(VideoBaseModel):
 
         if is_train:
             if self.opt.midas:
-                depth_1 = self.net_depth(self._input.img_1)
-                depth_2 = self.net_depth(self._input.img_2)
-
+                if self.opt.follow_dynibar:
+                    depth_1 = self._run_midas_dpt(self._input.img_1)
+                    depth_2 = self._run_midas_dpt(self._input.img_2)
+                else:
+                    depth_1 = self.net_depth(self._input.img_1)  # B1HW
+                    depth_2 = self.net_depth(self._input.img_2)
             else:
                 depth_1 = self.net_depth(self._input.img_1, self._input.frame_id_1.long())
                 depth_2 = self.net_depth(self._input.img_2, self._input.frame_id_2.long())
@@ -249,12 +325,17 @@ class Model(VideoBaseModel):
             steps = (time_gap / time_step).round().long().item()
             self.steps = steps
 
-            sf_1_2 = self.forward_sf_net_multi_step(global_p1, self._input.time_stamp_1, time_step=time_step, steps=steps)
-            if self.opt.use_motion_seg:
+            sf_1_2 = self.forward_sf_net_multi_step(global_p1, self._input.time_stamp_1, time_step=time_step, steps=steps)  # B3HW
+            if self.opt.use_motion_seg and (not self.opt.motion_seg_for_static):
                 sf_1_2 *= self._input.motion_seg_1.squeeze(3).permute(0, 3, 1, 2)
 
-            flow_data_input['sflow_1_2'] = sf_1_2.permute(0, 2, 3, 1)[..., None, :]  # .fill_(0)
-            flow_data_input['sflow_2_1'] = sf_1_2.permute(0, 2, 3, 1)[..., None, :]
+            flow_data_input['sflow_1_2'] = sf_1_2.permute(0, 2, 3, 1)[..., None, :]  # BHW13  .fill_(0)
+
+            # Should here has a negative sign?
+            # - https://github.com/google/dynamic-video-depth/issues/5
+            # flow_data_input['sflow_2_1'] = sf_1_2.permute(0, 2, 3, 1)[..., None, :]
+            flow_data_input['sflow_2_1'] = -1 * sf_1_2.permute(0, 2, 3, 1)[..., None, :]
+
             flow_data_input['flow_1_2'] = self._input.flow_1_2
             flow_data_input['flow_2_1'] = self._input.flow_2_1
             result = self.warp(**flow_data_input)
@@ -264,7 +345,10 @@ class Model(VideoBaseModel):
             result['sf_by_dep_1_2'] = dflow['sf_by_depth']
         else:
             if self.opt.midas:
-                depth = self.net_depth(self._input.img)
+                if self.opt.follow_dynibar:
+                    depth = self._run_midas_dpt(self._input.img)
+                else:
+                    depth = self.net_depth(self._input.img)
             else:
                 depth = self.net_depth(self._input.img, self._input.frame_id_1.long())
 
@@ -283,26 +367,26 @@ class Model(VideoBaseModel):
         return flow_cos_norm
 
     def _calc_loss(self, pred):
-        mask = self._input.mask_2
+        mask = self._input.mask_2  # BHW11
         if self.opt.midas:
-            mask = (pred['depth_1'] < 100).float().squeeze(1)[..., None, None] * mask
-            mask = (pred['warped_p2_camera_2'][..., 2] < 100).float().squeeze(3)[..., None, None] * mask
+            mask = (pred['depth_1'] < 100).float().squeeze(1)[..., None, None] * mask  # pred['depth_1']: B1HW
+            mask = (pred['warped_p2_camera_2'][..., 2] < 100).float().squeeze(3)[..., None, None] * mask  # pred['warped_p2_camera_2']: BHW13
 
         crit = self.L2_crit if self.warm else self.L1_crit
-        scene_flow_loss_1_2 = crit(pred['dflow_1_2'], self._input.flow_1_2)
+        scene_flow_loss_1_2 = crit(pred['dflow_1_2'], self._input.flow_1_2)  # Eq. (8) in paper
         flow_cos_norm = self.flow_cos_norm(pred['dflow_1_2'], self._input.flow_1_2)
         scene_flow_loss_cos = crit(flow_cos_norm, torch.ones_like(flow_cos_norm))
 
-        occ_mask = mask[:, None, ..., 0, 0].permute([0, 2, 3, 1])
+        occ_mask = mask[:, None, ..., 0, 0].permute([0, 2, 3, 1])  # BHW1
         scene_flow_loss_cos = torch.sum(occ_mask * scene_flow_loss_cos) / (torch.sum(occ_mask) + 1e-8)
 
         flow_loss_1_2 = torch.sum(occ_mask * scene_flow_loss_1_2.squeeze(3)) / (torch.sum(occ_mask) + 1e-8)
 
-        disp_loss_1_2 = self.disp_loss(pred['p1_camera_2'][..., -1], pred['warped_p2_camera_2'][..., -1]).permute([0, 3, 1, 2])
+        disp_loss_1_2 = self.disp_loss(pred['p1_camera_2'][..., -1], pred['warped_p2_camera_2'][..., -1]).permute([0, 3, 1, 2])  # Eq. (10); p1_camera_2: D_{i->j}; warped_p2_camera_2: D_j(p_{i->j})
 
         disp_loss_1_2 = torch.sum(occ_mask[:, None, ..., 0] * disp_loss_1_2[:, 0:1, ...]) / (torch.sum(occ_mask) + 1e-8)
 
-        sf_loss_pp = torch.abs(pred['sf_by_dep_1_2'].squeeze(3).permute(0, 3, 1, 2) - pred['sf_1_2'])
+        sf_loss_pp = torch.abs(pred['sf_by_dep_1_2'].squeeze(3).permute(0, 3, 1, 2) - pred['sf_1_2'])  # compare scene_flow_pred wrt scene_flow_from_depth
         sf_loss = torch.sum(occ_mask[:, None, ..., 0] * sf_loss_pp[:, ...]) / (torch.sum(occ_mask) + 1e-8)
 
         pred['sf_loss_pp'] = sf_loss_pp.sum(1).detach()
@@ -317,10 +401,24 @@ class Model(VideoBaseModel):
                 loss = flow_loss_1_2 * self.opt.flow_mul + disp_loss_1_2 * self.opt.disp_mul
             else:
                 loss = flow_loss_1_2 * self.opt.flow_mul + disp_loss_1_2 * self.opt.disp_mul
-
+        
         loss_data = {'total_loss': loss.item(), 'loss': loss.item(),
                      'flow_loss_1_2': flow_loss_1_2.item(),
                      'disp_loss_1_2': disp_loss_1_2.item(), 'sf_loss': sf_loss.item()}
+        
+        if self.opt.motion_seg_for_static:
+            static_sf_1_2 = pred['sf_1_2'] * (1 - self._input.motion_seg_1.squeeze(3).permute(0, 3, 1, 2))  # sf_1_2: B3HW; mask: B1HW
+            static_loss_1_2 = self.opt.static_mul * torch.mean(torch.abs(static_sf_1_2))
+            loss_data["static_loss_1_2"] = static_loss_1_2.item()
+        
+        if self.opt.follow_dynibar:
+            tmp_targets = {"depth_gt": self._input.depth_pred_1[:, 0, :, :], "gt_mask": self._input.mask_1[:, :, :, 0, 0]}
+            depth_joint_loss = self.depth_joint_loss(self._input.img_1, pred["depth_1"][:, 0, :, :], tmp_targets, use_sm_loss=not self.opt.dynibar_depth_no_sm)
+            loss = loss + self.opt.dynibar_depth_mul * depth_joint_loss
+            loss_data["depth_joint_loss"] = depth_joint_loss.item()
+        
+        # print("\nloss_data: ", loss_data, "\n")
+
         return loss, loss_data
 
     def _opt_reg(self, pred, steps=2):
@@ -337,7 +435,7 @@ class Model(VideoBaseModel):
 
         sf_1_2_t1 = self.forward_sf_net(global_p1_interp, time_stamp)
 
-        acc_loss = (mseg * torch.abs(sf_1_2_t1 - sf_1_2)).sum() / (mseg.sum() + 1e-6)
+        acc_loss = (mseg * torch.abs(sf_1_2_t1 - sf_1_2)).sum() / (mseg.sum() + 1e-6)  # Eq. (11) in paper
 
         loss = acc_loss * self.opt.acc_mul
         loss.backward()

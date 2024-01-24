@@ -49,8 +49,12 @@ if opt.manual_seed is not None:
 
 print(str_stage, "Setting up output directory")
 output_dir = opt.output_dir
+
 output_dir += (opt.net + '_' + opt.dataset + '_' + opt.suffix.format(**vars(opt))) \
     if opt.suffix != '' else (opt.net + '_' + opt.dataset)
+
+print("\ntest output_dir: ", output_dir, "\n")
+
 opt.output_dir = output_dir
 if os.path.isdir(join(output_dir, 'epoch_%04d' % opt.epoch)):
     if opt.overwrite:
@@ -91,6 +95,11 @@ if opt.epoch < 0:
     net_file = join(opt.checkpoint_path, 'best.pt')
 else:
     net_file = join(opt.checkpoint_path, 'nets', '%04d.pt' % opt.epoch)
+    if not os.path.exists(net_file):
+        print(f"\n{net_file} does not exists.\n")
+        net_file = join(opt.checkpoint_path, 'checkpoint.pt')
+
+print(f"\nUse {net_file}.\n")
 
 
 ###################################################

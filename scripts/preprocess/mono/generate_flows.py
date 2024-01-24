@@ -12,33 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
+
 import sys
 import os
-from os.path import join
-sys.path.append('./third_party/RAFT')
-sys.path.append('./third_party/RAFT/core')
-from raft import RAFT
-import numpy as np
-import torch.nn.functional as F
-from functools import lru_cache
-from glob import glob
+import tqdm
 import argparse
-from tqdm import tqdm
+import pathlib
 import subprocess
+import numpy as np
+from os.path import join
+from functools import lru_cache
+from skimage.transform import resize as imresize
+
+# from glob import glob
 
 try:
     import cv2
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", 'opencv-python'])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python"])
 finally:
     import cv2
 
-from skimage.transform import resize as imresize
+import torch
+import torch.nn.functional as F
 
-
-data_list_root = "./datafiles/davis_processed/frames_midas"
-outpath = './datafiles/davis_processed/flow_pairs'
+sys.path.insert(0, "./third_party/RAFT")
+sys.path.insert(0, "./third_party/RAFT/core")
+from third_party.RAFT.core.raft import RAFT
 
 
 def resize_flow(flow, size):
@@ -88,35 +88,40 @@ def get_L2_error_map(v1, v2):
 
 def load_RAFT():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', help="restore checkpoint")
-    parser.add_argument('--path', help="dataset for evaluation")
-    parser.add_argument('--small', action='store_true', help='use small model')
-    parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
-    parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
-    args = parser.parse_args(['--model', './third_party/RAFT/models/raft-sintel.pth', '--path', './'])
+    parser.add_argument("--model", help="restore checkpoint")
+    parser.add_argument("--path", help="dataset for evaluation")
+    parser.add_argument("--small", action="store_true", help="use small model")
+    parser.add_argument(
+        "--mixed_precision", action="store_true", help="use mixed precision"
+    )
+    parser.add_argument(
+        "--alternate_corr",
+        action="store_true",
+        help="use efficent correlation implementation",
+    )
+    args = parser.parse_args(
+        ["--model", "./third_party/RAFT/models/raft-sintel.pth", "--path", "./"]
+    )
     net = torch.nn.DataParallel(RAFT(args).cuda())
     net.load_state_dict(torch.load(args.model))
     return net
 
 
 @lru_cache(maxsize=200)
-def read_frame_data(key, frame_id):
-    data = np.load(join(data_list_root, key, 'frame_%05d.npz' % frame_id))
+def read_frame_data(data_root, frame_id):
+    data = np.load(data_root / f"frame_{frame_id:05d}.npz")
     data_dict = {}
     for k in data.keys():
         data_dict[k] = data[k]
     return data_dict
 
 
-net = load_RAFT()
+def generate_pair_data(data_root, save_dir, frame_id_1, frame_id_2, save=True):
+    im1_data = read_frame_data(data_root, frame_id_1)
+    im2_data = read_frame_data(data_root, frame_id_2)
 
-
-def generate_pair_data(key, frame_id_1, frame_id_2, save=True):
-    im1_data = read_frame_data(key, frame_id_1)
-    im2_data = read_frame_data(key, frame_id_2)
-
-    im1 = im1_data['img_orig'] * 255
-    im2 = im2_data['img_orig'] * 255
+    im1 = im1_data["img_orig"] * 255
+    im2 = im2_data["img_orig"] * 255
     im1 = imresize(im1, [288, 512], anti_aliasing=True)
     im2 = imresize(im2, [288, 512], anti_aliasing=True)
 
@@ -124,19 +129,25 @@ def generate_pair_data(key, frame_id_1, frame_id_2, save=True):
     images = np.array(images).transpose(0, 3, 1, 2)
     im = torch.from_numpy(images.astype(np.float32)).cuda()
     with torch.no_grad():
-        flow_low, flow_up = net(image1=im[0:1, ...], image2=im[1:2, ...], iters=20, test_mode=True)
+        flow_low, flow_up = net(
+            image1=im[0:1, ...], image2=im[1:2, ...], iters=20, test_mode=True
+        )
         flow_1_2 = flow_up.squeeze().permute(1, 2, 0).cpu().numpy()
 
-    H, W, _ = im1_data['img'].shape
+    H, W, _ = im1_data["img"].shape
     flow_1_2 = resize_flow(flow_1_2, [W, H])
 
     with torch.no_grad():
-        flow_low, flow_up = net(image1=im[1:2, ...], image2=im[0:1, ...], iters=20, test_mode=True)
+        flow_low, flow_up = net(
+            image1=im[1:2, ...], image2=im[0:1, ...], iters=20, test_mode=True
+        )
         flow_2_1 = flow_up.squeeze().permute(1, 2, 0).cpu().numpy()
 
     flow_2_1 = resize_flow(flow_2_1, [W, H])
 
-    warp_flow_1_2 = backward_flow_warp(flow_1_2, flow_2_1)  # using latter to sample former
+    warp_flow_1_2 = backward_flow_warp(
+        flow_1_2, flow_2_1
+    )  # using latter to sample former
     err_1 = np.linalg.norm(warp_flow_1_2 + flow_2_1, axis=-1)
     mask_1 = np.where(err_1 > 1, 1, 0)
     oob_mask_1 = get_oob_mask(flow_2_1)
@@ -147,32 +158,46 @@ def generate_pair_data(key, frame_id_1, frame_id_2, save=True):
     oob_mask_2 = get_oob_mask(flow_1_2)
     mask_2 = np.clip(mask_2 + oob_mask_2, a_min=0, a_max=1)
     save_dict = {}
-    save_dict['flow_1_2'] = flow_1_2.astype(np.float32)
-    save_dict['flow_2_1'] = flow_2_1.astype(np.float32)
-    save_dict['mask_1'] = mask_1.astype(np.uint8)
-    save_dict['mask_2'] = mask_2.astype(np.uint8)
-    save_dict['frame_id_1'] = frame_id_1
-    save_dict['frame_id_2'] = frame_id_2
+    save_dict["flow_1_2"] = flow_1_2.astype(np.float32)
+    save_dict["flow_2_1"] = flow_2_1.astype(np.float32)
+    save_dict["mask_1"] = mask_1.astype(np.uint8)
+    save_dict["mask_2"] = mask_2.astype(np.uint8)
+    save_dict["frame_id_1"] = frame_id_1
+    save_dict["frame_id_2"] = frame_id_2
     if save:
-        np.savez(join(outpath, key, f'flowpair_{frame_id_1:05d}_{frame_id_2:05d}.npz'), **save_dict)
+        np.savez(
+            save_dir / f"flowpair_{frame_id_1:05d}_{frame_id_2:05d}.npz",
+            **save_dict,
+        )
         return 1
     else:
         return save_dict
 
-# %%
 
+if __name__ == "__main__":
 
-track_names = sorted(glob(join(data_list_root, '*')))
-track_names = ['train']  # ['dog', 'train']
-track_ids = np.arange(len(track_names))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_root", default=".")
+    parser.add_argument("--save_dir", default=".")
+    args = parser.parse_args()
 
-# %%
-for track_id in tqdm(track_ids):
-    key = track_names[track_id]
-    print(key)
-    l = len(sorted(glob(join(data_list_root, key, 'frame_*.npz'))))
-    os.makedirs(join(outpath, track_names[track_id]), exist_ok=True)
+    data_root = pathlib.Path(args.data_root)
+    save_dir = pathlib.Path(args.save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    net = load_RAFT()
+
+    scene_dir = data_root / "frames_midas"
+
+    scene_save_dir = save_dir / "flow_pairs"
+    scene_save_dir.mkdir(parents=True, exist_ok=True)
+
+    l = len(list(scene_dir.glob("frame_*.npz")))
+
     gaps = [1, 2, 3, 4, 5, 6, 7, 8]
-    for g in gaps:
-        for k in tqdm(range(l - g)):
-            generate_pair_data(key, k, k + g)
+
+    for g in tqdm.tqdm(gaps, desc="#gaps"):
+        print("\ngap: ", g)
+
+        for k in tqdm.tqdm(range(l - g), desc="#frames"):
+            generate_pair_data(scene_dir, scene_save_dir, k, k + g)

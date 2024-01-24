@@ -1,3 +1,9 @@
+This repo is modified to tailor to the need of the work [PGDVS, ICLR 2024](https://arxiv.org/abs/2310.08587). We mainly modify the following:
+
+1. We support ViT-based MiDaS;
+2. Instead of modifiying camera extrinsic's translations as used in Sec. 3.2 of [the orignal paper](https://arxiv.org/abs/2108.01166), we modify the scale of the predicted depth to align with the given camera poses;
+3. We follow [DynIBaR](https://arxiv.org/abs/2211.11082) to add a regularization loss during the optimization (see Sec. 3 of the [DynIBaR's supp](https://dynibar.github.io/static/pdfs/supp.pdf)).
+
 # Consistent Depth of Moving Objects in Video
 
 ![teaser](./assets/teaser.gif)
@@ -99,7 +105,6 @@ bash ./scripts/download_triangulation_files.sh
 4. Run `python ./scripts/preprocess/shutterstock/generate_sequence_midas.py` to pack flows and per-frame data into training batches.
 
 5. Example training script is located at `./experiments/shutterstock/train_sequence.sh`
-
 
 
 
